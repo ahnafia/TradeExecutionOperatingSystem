@@ -1,0 +1,80 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: trading-pg
+    environment:
+      POSTGRES_USER: trading
+      POSTGRES_PASSWORD: trading
+      POSTGRES_DB: trading
+    # 5432 is taken by another project on this machine; the engine talks to 5433.
+    ports:
+      - "5433:5432"
+    command:
+      - "postgres"
+      - "-c"
+      - "fsync=on"
+      - "-c"
+      - "synchronous_commit=on"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading -d trading"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - trading-pgdata:/var/lib/postgresql/data
+
+  # Redpanda rather than Kafka + ZooKeeper: one binary, Kafka-wire-compatible, and the
+  # playground profile in ARCHITECTURE.md §P2.5 calls for it anyway. Nothing in the engine
+  # knows the difference — it speaks the Kafka protocol through franz-go.
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    container_name: trading-redpanda
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:19092
+      - --advertise-kafka-addr=PLAINTEXT://localhost:19092
+    ports:
+      - "19092:19092"
+      - "19644:9644"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 2s
+      timeout: 5s
+      retries: 40
+    volumes:
+      - trading-rpdata:/var/lib/redpanda/data
+
+  # Analytics only. Nothing on the transactional path reads or writes it, and nothing may
+  # ever gate a financial decision on it — ARCHITECTURE.md §8.1 guarantee 10.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    container_name: trading-clickhouse
+    environment:
+      CLICKHOUSE_DB: trading
+      CLICKHOUSE_USER: trading
+      CLICKHOUSE_PASSWORD: trading
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "9000:9000"
+      - "8123:8123"
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 40
+    volumes:
+      - trading-chdata:/var/lib/clickhouse
+
+volumes:
+  trading-pgdata:
+  trading-rpdata:
+  trading-chdata:

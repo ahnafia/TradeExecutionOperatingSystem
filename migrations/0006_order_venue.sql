@@ -1,0 +1,11 @@
+-- Let an order say where it wants to rest.
+--
+-- Without this, multiple venues are decorative: the router can SWEEP across venues when
+-- taking, but every resting order lands at the primary, so no liquidity ever accumulates
+-- anywhere else and there is nothing to sweep. A maker choosing its venue is how a second
+-- venue comes to exist at all.
+--
+-- It is a preference, not an instruction to the taker side: the smart order router still
+-- takes the best price wherever it is. What this controls is only where an order RESTS,
+-- which is the one decision the router cannot make on the maker's behalf.
+ALTER TABLE orders ADD COLUMN venue text NULL;

@@ -1,0 +1,24 @@
+# Prometheus scrape config for the trading engine.
+#
+# Scrape interval is 1s to match the engine's invariant-check cadence
+# (internal/metrics/metrics.go RefreshLoop / ARCHITECTURE.md §12). The invariant
+# gauges (trading_invariants_ok, trading_invariant_violations, ...) are
+# recomputed every second; scraping slower than that would let a violation
+# come and go between scrapes and never show up on the dashboard.
+
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: trading-engine
+    scrape_interval: 1s
+    scrape_timeout: 1s
+    metrics_path: /metrics
+    static_configs:
+      # The engine runs on the host via `tradectl serve`, not inside compose,
+      # so Prometheus (in a container) reaches it through the Docker host
+      # gateway rather than a service name.
+      - targets: ["host.docker.internal:9464"]
+        labels:
+          service: trading-engine
