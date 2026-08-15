@@ -42,6 +42,9 @@ import (
 // DefaultDSN is used by callers that do not supply their own. It targets a local,
 // single-node, unauthenticated ClickHouse — what docker-compose and local dev run — not a
 // production endpoint.
+// DefaultDSN is a development default matching the throwaway container in
+// docker-compose.yml. It is not a secret and is not meant to be reused; a real deployment
+// passes its own DSN and keeps the password out of the connection string entirely.
 const DefaultDSN = "clickhouse://localhost:9000/trading"
 
 // connectTimeout bounds how long the constructors below wait for the initial Ping. It is

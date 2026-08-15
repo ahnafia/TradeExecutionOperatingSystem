@@ -35,6 +35,12 @@ import (
 	"github.com/ahnafia/trading-system/migrations"
 )
 
+// Development defaults, matching the throwaway containers in docker-compose.yml.
+//
+// These credentials are not secrets and are not meant to be reused: the compose file
+// creates the database with them, and both are thrown away with `make down`. Any real
+// deployment sets TRADING_DSN and TRADING_KAFKA instead, and should not carry a password
+// in a DSN at all — use a secret store or IAM auth.
 const (
 	defaultDSN   = "postgres://trading:trading@localhost:5433/trading?sslmode=disable"
 	defaultKafka = "localhost:19092"
