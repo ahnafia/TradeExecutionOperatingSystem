@@ -19,12 +19,15 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/ahnafia/trading-system/internal/book"
 	"github.com/ahnafia/trading-system/internal/engine"
+	"github.com/ahnafia/trading-system/internal/identity"
 	"github.com/ahnafia/trading-system/internal/money"
 	"github.com/ahnafia/trading-system/internal/pipeline"
 )
@@ -54,6 +57,12 @@ type Server struct {
 	hub     *hub
 	limiter *limiter
 	cfg     Config
+	auth    AuthConfig
+	ident   *identity.Store
+	http    *http.Client
+
+	// trustHeader enables the Part 1 bypass. Off unless asked for by name.
+	trustHeader bool
 }
 
 // New builds the API. Call Start to begin tailing the outcome log.
@@ -61,7 +70,31 @@ func New(pl *pipeline.Pipeline, cfg Config) *Server {
 	return &Server{
 		eng: pl.Engine, pl: pl, hub: newHub(pl.Log),
 		limiter: newLimiter(), cfg: cfg,
+		auth:  AuthConfigFromEnv(),
+		ident: identity.New(pl.Engine.Pool()),
+		// A bounded client: an OAuth provider that hangs must not hold a request open
+		// indefinitely and consume a connection slot.
+		http:        &http.Client{Timeout: 10 * time.Second},
+		trustHeader: os.Getenv("TRADING_TRUST_HEADER") == "1",
 	}
+}
+
+// AuthSummary describes the login posture, for the startup banner.
+func (s *Server) AuthSummary() string {
+	var modes []string
+	if s.auth.gitHubEnabled() {
+		modes = append(modes, "github oauth")
+	}
+	if s.auth.DevLogin {
+		modes = append(modes, "dev login (NOT authentication)")
+	}
+	if s.trustHeader {
+		modes = append(modes, "X-Account-Id header (IMPERSONATION ENABLED)")
+	}
+	if len(modes) == 0 {
+		return "none configured — nobody can sign in"
+	}
+	return strings.Join(modes, " · ")
 }
 
 // Start begins the fill stream's tailers.
@@ -71,7 +104,7 @@ func (s *Server) Start(ctx context.Context) { s.hub.run(ctx) }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("POST /api/accounts", s.handleSignup)
+	s.authRoutes(mux)
 	mux.HandleFunc("GET /api/me", s.handleMe)
 	mux.HandleFunc("GET /api/symbols", s.handleSymbols)
 	mux.HandleFunc("GET /api/book/{symbol}", s.handleBook)
@@ -89,51 +122,8 @@ func (s *Server) Handler() http.Handler {
 
 // --- accounts ---------------------------------------------------------------
 
-type signupReq struct {
-	Label string `json:"label"`
-}
-
-type signupResp struct {
-	AccountID string `json:"account_id"`
-	Label     string `json:"label"`
-	Cash      string `json:"cash"`
-	Note      string `json:"note"`
-}
-
-// handleSignup provisions an account with simulated money.
-//
-// Part 2 replaces this with OAuth, and the engine does not change: it has only ever known
-// an opaque account id, so identity is a table beside it rather than a column inside it
-// (seam contract #1).
-func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
-	var req signupReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "expected a JSON body")
-		return
-	}
-	req.Label = strings.TrimSpace(req.Label)
-	if req.Label == "" || len(req.Label) > 40 {
-		writeErr(w, http.StatusBadRequest, "BAD_LABEL", "label must be 1–40 characters")
-		return
-	}
-
-	id, err := s.eng.OpenAccount(r.Context(), req.Label)
-	if err != nil {
-		writeErr(w, http.StatusConflict, "LABEL_TAKEN", "that label is already in use")
-		return
-	}
-	if s.cfg.SignupDeposit > 0 {
-		if err := s.eng.Deposit(r.Context(), id, s.cfg.SignupDeposit); err != nil {
-			writeErr(w, http.StatusInternalServerError, "DEPOSIT_FAILED", err.Error())
-			return
-		}
-	}
-	writeJSON(w, http.StatusCreated, signupResp{
-		AccountID: id.String(), Label: req.Label,
-		Cash: s.cfg.SignupDeposit.String(),
-		Note: "Simulated money. Send this id as the X-Account-Id header.",
-	})
-}
+// Accounts are provisioned by logging in, not by a separate signup call. One fewer way to
+// come into existence means one fewer way to come into existence unauthenticated.
 
 type meResp struct {
 	AccountID   string `json:"account_id"`
@@ -450,8 +440,8 @@ func (s *Server) handlePositions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) require(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, ok := accountOf(r)
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "NO_ACCOUNT",
-			"send X-Account-Id; create one with POST /api/accounts")
+		writeErr(w, http.StatusUnauthorized, "NOT_SIGNED_IN",
+			"sign in first; see GET /auth/status for the available methods")
 		return uuid.Nil, false
 	}
 	return id, true

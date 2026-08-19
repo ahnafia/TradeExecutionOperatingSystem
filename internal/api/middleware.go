@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/ahnafia/trading-system/internal/identity"
 )
 
 // The interceptor chain.
@@ -34,6 +36,7 @@ type ctxKey string
 const (
 	ctxRequestID ctxKey = "request_id"
 	ctxAccount   ctxKey = "account_id"
+	ctxUser      ctxKey = "user"
 )
 
 // recoverer turns a panic into a 500 rather than a dropped connection.
@@ -114,9 +117,12 @@ func rateLimit(s *Server, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		key := r.Header.Get(accountHeader)
-		if key == "" {
-			key = r.RemoteAddr
+		// Limit per account where we know one, per address otherwise. Keying only on the
+		// account would leave unauthenticated endpoints — signup, login — unlimited, which
+		// is where a public service actually gets hammered.
+		key := r.RemoteAddr
+		if id, ok := accountOf(r); ok {
+			key = id.String()
 		}
 		if !s.limiter.allow(key, s.cfg.RequestsPerMinute) {
 			w.Header().Set("Retry-After", "60")
@@ -128,30 +134,60 @@ func rateLimit(s *Server, next http.Handler) http.Handler {
 	})
 }
 
-// accountHeader is what the no-op authenticator trusts.
+// accountHeader is the Part 1 bypass, now off unless explicitly enabled.
 const accountHeader = "X-Account-Id"
 
-// authenticate is the slot from seam contract #2.
+// authenticate is the slot from seam contract #2, with the real implementation in it.
 //
-// Right now it trusts a header, exactly as the contract describes for Part 1 — anyone can
-// claim to be any account. That is fine for a CLI and a local demo and is NOT fine on the
-// public internet, which is why this is one function: Part 2 swaps the body for a session
-// or OAuth lookup and no handler changes, because no handler ever asks who the caller is.
+// Note what did NOT change to get here: no handler, no route, no engine call. A handler
+// still receives an account id from the context and has never known where it came from,
+// which is exactly what the contract was for. The whole of Part 2's identity work lands in
+// this function and the package it calls.
+//
+// The header path survives only when TRADING_TRUST_HEADER is set, because it is
+// impersonation-as-a-feature: with it on, anyone can name any account. It is genuinely
+// useful for local scripting against a throwaway database and genuinely disqualifying
+// anywhere else, so it must be asked for by name.
 func authenticate(s *Server, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw := r.Header.Get(accountHeader)
-		if raw == "" {
-			next.ServeHTTP(w, r) // public routes decide for themselves
-			return
+		if c, err := r.Cookie(sessionCookie); err == nil {
+			user, err := s.ident.Resolve(r.Context(), c.Value)
+			if err == nil {
+				ctx := context.WithValue(r.Context(), ctxAccount, user.AccountID)
+				ctx = context.WithValue(ctx, ctxUser, user)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			// A stale cookie is cleared rather than left to fail every request, so the
+			// browser stops presenting it and the user simply looks logged out.
+			http.SetCookie(w, &http.Cookie{
+				Name: sessionCookie, Value: "", Path: "/", MaxAge: -1,
+				HttpOnly: true, SameSite: http.SameSiteLaxMode,
+			})
 		}
-		id, err := s.eng.AccountRef(r.Context(), raw)
-		if err != nil {
-			writeErr(w, http.StatusUnauthorized, "UNKNOWN_ACCOUNT",
-				fmt.Sprintf("no account %q", raw))
-			return
+
+		if s.trustHeader {
+			if raw := r.Header.Get(accountHeader); raw != "" {
+				id, err := s.eng.AccountRef(r.Context(), raw)
+				if err != nil {
+					writeErr(w, http.StatusUnauthorized, "UNKNOWN_ACCOUNT",
+						fmt.Sprintf("no account %q", raw))
+					return
+				}
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxAccount, id)))
+				return
+			}
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxAccount, id)))
+
+		next.ServeHTTP(w, r) // unauthenticated; each route decides what that means
 	})
+}
+
+// userOf returns the signed-in person, when there is one. Handlers that only need an
+// account use accountOf and stay ignorant of identity entirely.
+func userOf(r *http.Request) (identity.User, bool) {
+	u, ok := r.Context().Value(ctxUser).(identity.User)
+	return u, ok
 }
 
 // accountOf returns the authenticated account, or false if the request carried none.

@@ -185,9 +185,14 @@ func serve(ctx context.Context, pl *pipeline.Pipeline, md *marketdata.Cache, arg
 	// The trading API: the only way anything other than the CLI reaches the engine.
 	apiSrv := api.New(pl, api.DefaultConfig())
 	apiSrv.Start(ctx)
+	spawn(func() { apiSrv.PurgeSessions(ctx) })
 
 	mux := http.NewServeMux()
-	mux.Handle("/api/", apiSrv.Handler())
+	// Both prefixes route to the same handler: its ServeMux matches on the full path, and
+	// mounting only /api/ would leave the login flow unreachable.
+	apiHandler := apiSrv.Handler()
+	mux.Handle("/api/", apiHandler)
+	mux.Handle("/auth/", apiHandler)
 	mux.Handle("/metrics", m.Handler())
 
 	// Liveness: the process is up. Deliberately does NOT touch the database — a health
@@ -231,6 +236,7 @@ func serve(ctx context.Context, pl *pipeline.Pipeline, md *marketdata.Cache, arg
 	fmt.Printf("  fills    http://localhost%s/api/fills   (SSE)\n", cfg.addr)
 	fmt.Printf("  metrics  http://localhost%s/metrics\n", cfg.addr)
 	fmt.Printf("  status   http://localhost%s/\n", cfg.addr)
+	fmt.Printf("  auth     %s\n", apiSrv.AuthSummary())
 	fmt.Println("ctrl-c to stop")
 
 	err = srv.ListenAndServe()

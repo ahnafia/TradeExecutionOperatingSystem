@@ -118,6 +118,29 @@ tradectl serve [addr]                              run under load with /metrics
 tradectl chaos [orders]                            fault injection + verification block
 ```
 
+### HTTP API
+
+```
+GET  /auth/status                    what login methods exist
+GET  /auth/github                    begin OAuth
+POST /auth/dev            {name}     local-only login
+POST /auth/logout
+
+GET  /api/me                         cash, reserved, buying power
+GET  /api/symbols
+GET  /api/book/{symbol}
+POST /api/orders          {symbol, side, type, qty, limit_price?, tif?, venue?}
+GET  /api/orders                     your recent orders
+GET  /api/orders/{id}
+POST /api/orders/{id}/cancel
+GET  /api/positions
+GET  /api/fills                      Server-Sent Events: live fills and status changes
+```
+
+`POST /api/orders` returns `202 ACCEPTED` as soon as the order is durable — matching
+happens behind the log, and the fills arrive on the stream. A rejection is `422`, because
+the request was well-formed and the system declined it.
+
 `serve` runs the engine under continuous synthetic load — market makers quoting, takers
 crossing, cancels racing fills, snapshots being written — with the invariant gauges on
 `/metrics` and a plain-text summary on `/`. Invariant gauges pinned at zero on an idle
@@ -202,6 +225,30 @@ Deliberate, and each has a phase attached in [ARCHITECTURE.md](ARCHITECTURE.md#1
   expose the hook. A real broker cannot be asked to duplicate, so over Kafka duplication is
   induced by killing the relay between produce and mark — which is what the outbox is
   designed to survive, but it is not scripted here.
+
+## Signing in
+
+Accounts are created by logging in — there is no separate signup, so there is one fewer
+way to come into existence unauthenticated.
+
+| Method | Enable with | Use |
+|---|---|---|
+| **GitHub OAuth** | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `PUBLIC_URL` | anything public |
+| **Dev login** | `TRADING_DEV_LOGIN=1` | local only — signs you in as any name with no proof |
+| **Header trust** | `TRADING_TRUST_HEADER=1` | local only — lets any caller name any account |
+
+The last two are impersonation with the safety off. Neither is implied by anything; both
+must be asked for by name, so a misconfigured deploy fails closed with no login at all
+rather than silently opening.
+
+Sessions are server-side and only their **hash** is stored — the cookie holds the sole copy
+of the token, so a database leak yields nothing replayable. The cookie is `HttpOnly`
+(script cannot read it), `SameSite=Lax` (another origin cannot POST an order with it), and
+`Secure` whenever `PUBLIC_URL` is not localhost.
+
+Identity lives in its own `identity` schema. The trading engine has **no column anywhere**
+mentioning an email, an OAuth subject, or a session — it knows an opaque `account_id` and
+nothing else, which is seam contract #1 and is checked rather than assumed.
 
 ## Transports
 

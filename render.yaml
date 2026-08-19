@@ -20,6 +20,19 @@ services:
           name: trade-execution-db
           property: connectionString
       # PORT is injected by Render; serve binds it.
+      - key: PUBLIC_URL
+        sync: false        # your https://….onrender.com origin. Required for OAuth:
+                           # it builds the callback URL and decides whether cookies may
+                           # be marked Secure.
+      - key: GITHUB_CLIENT_ID
+        sync: false        # from a GitHub OAuth App whose callback is
+                           # $PUBLIC_URL/auth/github/callback
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      # Deliberately NOT set here:
+      #   TRADING_DEV_LOGIN    — signs anyone in as any name, with no proof
+      #   TRADING_TRUST_HEADER — lets any caller name any account
+      # Both are local-development conveniences and are disqualifying in public.
 
 databases:
   - name: trade-execution-db
