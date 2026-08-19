@@ -87,10 +87,7 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	dsn := os.Getenv("TRADING_DSN")
-	if dsn == "" {
-		dsn = defaultDSN
-	}
+	dsn := databaseURL()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -161,6 +158,21 @@ func newPipeline(ctx context.Context, pool *pgxpool.Pool, md *marketdata.Cache) 
 		cfg.KafkaSeeds = strings.Split(seeds, ",")
 	}
 	return pipeline.New(ctx, pool, md, cfg)
+}
+
+// databaseURL resolves the connection string.
+//
+// DATABASE_URL comes first because that is what managed hosts inject — Render, Fly, and
+// Heroku all set it, and none of them will set ours. Falling back to TRADING_DSN keeps
+// local overrides working, and the compiled default keeps `make demo` a single command.
+func databaseURL() string {
+	if v := os.Getenv("DATABASE_URL"); v != "" {
+		return v
+	}
+	if v := os.Getenv("TRADING_DSN"); v != "" {
+		return v
+	}
+	return defaultDSN
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

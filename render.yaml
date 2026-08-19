@@ -1,0 +1,27 @@
+# Render blueprint: one always-on web service, one managed Postgres.
+#
+# Deliberately NOT here: Kafka and ClickHouse. The event log runs in Postgres
+# (migrations/0008), so a playground needs exactly one datastore. Add a broker when one
+# database stops keeping up, not before.
+services:
+  - type: web
+    name: trade-execution-os
+    runtime: docker
+    plan: starter          # NOT free: a free instance sleeps when idle, and a sleeping
+                           # exchange has no market makers quoting, so the book empties
+                           # and nobody can trade until someone wakes it up.
+    numInstances: 1        # One writer. The partition lease would fence a second one, but
+                           # you would be paying to duplicate work and confuse yourself.
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: trade-execution-db
+          property: connectionString
+      # PORT is injected by Render; serve binds it.
+
+databases:
+  - name: trade-execution-db
+    plan: basic-256mb      # The free tier expires after 90 days.
+    postgresMajorVersion: "16"

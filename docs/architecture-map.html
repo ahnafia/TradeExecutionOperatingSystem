@@ -1,0 +1,313 @@
+<title>Trading Engine — File Map</title>
+<style>
+  :root{
+    --paper:#fcfcfd; --panel:#fff; --ink:#15171c; --muted:#5f636c; --rule:#e2e4e9;
+    --hot:#0a6675; --async:#8a5a12; --code:#f2f3f6; --codeink:#1d4650; --shade:#f7f8fa;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --paper:#0e1013; --panel:#15181d; --ink:#e5e8ec; --muted:#969ca6; --rule:#252931;
+      --hot:#57c3d6; --async:#dca747; --code:#1a1e24; --codeink:#8fd4e0; --shade:#12151a;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#0e1013; --panel:#15181d; --ink:#e5e8ec; --muted:#969ca6; --rule:#252931;
+    --hot:#57c3d6; --async:#dca747; --code:#1a1e24; --codeink:#8fd4e0; --shade:#12151a;
+  }
+  *{box-sizing:border-box}
+  body{
+    background:var(--paper); color:var(--ink); margin:0;
+    font:400 16px/1.62 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:56px 28px 96px}
+  header{border-bottom:2px solid var(--ink);padding-bottom:22px;margin-bottom:14px}
+  h1{font-size:clamp(28px,4.2vw,40px);line-height:1.1;margin:0 0 10px;letter-spacing:-.02em;text-wrap:balance}
+  .sub{color:var(--muted);font-size:16.5px;max-width:64ch;margin:0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:16px;font-size:13px;color:var(--muted)}
+  .meta b{color:var(--ink);font-weight:600}
+  h2{font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
+     margin:56px 0 6px;font-weight:700}
+  h2+.lede{margin:0 0 22px;color:var(--muted);max-width:70ch;font-size:15px}
+  h3{font-size:17px;margin:32px 0 10px;letter-spacing:-.01em}
+  code,.f{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .f{font-size:12.5px;color:var(--codeink);background:var(--code);
+     padding:1.5px 6px;border-radius:4px;white-space:nowrap}
+  figure{margin:0 0 8px}
+  svg{max-width:100%;height:auto;display:block;margin:0 auto}
+  figcaption{color:var(--muted);font-size:13.5px;margin-top:14px;text-align:center;max-width:72ch;
+    margin-left:auto;margin-right:auto}
+  .tw{overflow-x:auto;border:1px solid var(--rule);border-radius:8px;background:var(--panel);margin-top:14px}
+  table{border-collapse:collapse;width:100%;font-size:14px;min-width:660px}
+  th{text-align:left;font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+     font-weight:700;padding:11px 14px;border-bottom:1px solid var(--rule);background:var(--shade);white-space:nowrap}
+  td{padding:11px 14px;border-bottom:1px solid var(--rule);vertical-align:top}
+  tr:last-child td{border-bottom:0}
+  td.n{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;
+       font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;white-space:nowrap}
+  .key{display:flex;flex-wrap:wrap;gap:20px;margin:18px 0 0;font-size:13.5px;color:var(--muted)}
+  .key span{display:flex;align-items:center;gap:8px}
+  .sw{width:22px;height:3px;border-radius:2px;flex:none}
+  .note{border-left:3px solid var(--hot);background:var(--shade);padding:14px 18px;
+        margin:22px 0;font-size:14.5px;border-radius:0 6px 6px 0}
+  .note b{color:var(--ink)}
+  a{color:inherit;text-decoration-color:var(--rule);text-underline-offset:3px}
+</style>
+
+<div class="wrap">
+<header>
+  <h1>Trading Engine — File Map</h1>
+  <p class="sub">Where every file sits in the path an order actually takes. Each box and row
+  names the file that implements it, so you can read the picture and open the code side by side.</p>
+  <div class="meta">
+    <span><b>33</b> source files · <b>9,076</b> lines</span>
+    <span><b>9</b> test files · <b>2,704</b> lines</span>
+    <span><b>8</b> migrations</span>
+    <span><b>ahnafia/TradeExecutionOperatingSystem</b></span>
+  </div>
+</header>
+
+<h2>The path an order takes</h2>
+<p class="lede">One order, top to bottom. The heavy rule is the durability boundary: everything
+above it happens in a single Postgres transaction and the client is told ACCEPTED there.
+Everything below is driven by the log and can crash, restart, and repeat without costing anything.</p>
+
+<figure>
+<svg viewBox="0 0 760 700" role="img" aria-label="An order flows from the client through a single durable accept transaction, then across a durability boundary into the outbox relay, the event log, the matching engine, and back to settlement in the ledger.">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--hot)"/>
+    </marker>
+    <marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--async)"/>
+    </marker>
+  </defs>
+
+  <!-- CLIENT -->
+  <rect x="40" y="24" width="330" height="58" rx="7" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <text x="58" y="48" font-size="14" font-weight="600" fill="currentColor">CLIENT</text>
+  <text x="58" y="68" font-size="11.5" font-family="ui-monospace,Menlo,monospace" fill="var(--muted)">cmd/tradectl/main.go · serve.go</text>
+  <line x1="205" y1="82" x2="205" y2="112" stroke="var(--hot)" stroke-width="2" marker-end="url(#ah)"/>
+
+  <!-- ACCEPT -->
+  <rect x="40" y="114" width="330" height="76" rx="7" fill="none" stroke="var(--hot)" stroke-width="2.5"/>
+  <text x="58" y="139" font-size="14" font-weight="600" fill="var(--hot)">ACCEPT — one durable transaction</text>
+  <text x="58" y="158" font-size="11.5" fill="var(--muted)">lock account · risk · reserve · order · outbox row</text>
+  <text x="58" y="177" font-size="11.5" font-family="ui-monospace,Menlo,monospace" fill="var(--muted)">engine/submit.go · engine.go · cancel.go</text>
+  <text x="392" y="146" font-size="12" fill="var(--hot)">risk + reservation are</text>
+  <text x="392" y="163" font-size="12" fill="var(--hot)">inside this lock</text>
+  <text x="392" y="180" font-size="11.5" font-family="ui-monospace,Menlo,monospace" fill="var(--muted)">engine/lease.go fences it</text>
+
+  <!-- BOUNDARY -->
+  <line x1="24" y1="208" x2="736" y2="208" stroke="currentColor" stroke-width="2.5" stroke-dasharray="7 5"/>
+  <text x="24" y="228" font-size="12.5" font-weight="700" fill="currentColor">DURABILITY BOUNDARY — client is told ACCEPTED here (~4 ms)</text>
+  <text x="24" y="245" font-size="12" fill="var(--muted)">below this line nothing can lose the order; it can only repeat itself</text>
+
+  <line x1="205" y1="256" x2="205" y2="286" stroke="var(--async)" stroke-width="2" marker-end="url(#aa)"/>
+
+  <!-- RELAY -->
+  <rect x="40" y="288" width="330" height="58" rx="7" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <text x="58" y="312" font-size="14" font-weight="600" fill="currentColor">RELAY</text>
+  <text x="58" y="332" font-size="11.5" font-family="ui-monospace,Menlo,monospace" fill="var(--muted)">outbox/relay.go</text>
+  <text x="392" y="316" font-size="12" fill="var(--muted)">at-least-once; publishes</text>
+  <text x="392" y="333" font-size="12" fill="var(--muted)">in outbox id order</text>
+
+  <line x1="205" y1="346" x2="205" y2="380" stroke="var(--async)" stroke-width="2" marker-end="url(#aa)"/>
+  <text x="216" y="366" font-size="12" font-weight="600" fill="var(--async)">orders.inbound · key = symbol</text>
+
+  <!-- LOG -->
+  <rect x="40" y="382" width="330" height="62" rx="7" fill="none" stroke="var(--async)" stroke-width="2" stroke-dasharray="4 3"/>
+  <text x="58" y="406" font-size="14" font-weight="600" fill="var(--async)">EVENT LOG</text>
+  <text x="58" y="426" font-size="11.5" font-family="ui-monospace,Menlo,monospace" fill="var(--muted)">eventlog/pglog.go · kafkalog.go · memlog.go</text>
+  <text x="392" y="404" font-size="12" fill="var(--muted)">three implementations,</text>
+  <text x="392" y="421" font-size="12" fill="var(--muted)">one interface</text>
+  <text x="392" y="438" font-size="11.5" font-family="ui-monospace,Menlo,monospace" fill="var(--muted)">eventlog/eventlog.go</text>
+
+  <line x1="205" y1="444" x2="205" y2="474" stroke="var(--async)" stroke-width="2" marker-end="url(#aa)"/>
+
+  <!-- MATCHING -->
+  <rect x="40" y="476" width="330" height="76" rx="7" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <text x="58" y="501" font-size="14" font-weight="600" fill="currentColor">MATCHING — sharded by symbol</text>
+  <text x="58" y="520" font-size="11.5" fill="var(--muted)">price-time books · venue routing · snapshots</text>
+  <text x="58" y="539" font-size="11.5" font-family="ui-monospace,Menlo,monospace" fill="var(--muted)">matching/matching.go · router.go · book/book.go</text>
+  <text x="392" y="508" font-size="12" fill="var(--muted)">pure: no clock, no random,</text>
+  <text x="392" y="525" font-size="12" fill="var(--muted)">no network → replayable</text>
+  <text x="392" y="542" font-size="11.5" font-family="ui-monospace,Menlo,monospace" fill="var(--muted)">ids.go derives fill identity</text>
+
+  <line x1="205" y1="552" x2="205" y2="586" stroke="var(--async)" stroke-width="2" marker-end="url(#aa)"/>
+  <text x="216" y="572" font-size="12" font-weight="600" fill="var(--async)">orders.outcomes · key = account_id</text>
+
+  <!-- SETTLE -->
+  <rect x="40" y="588" width="330" height="76" rx="7" fill="none" stroke="var(--hot)" stroke-width="2.5"/>
+  <text x="58" y="613" font-size="14" font-weight="600" fill="var(--hot)">SETTLE — offset in the same transaction</text>
+  <text x="58" y="632" font-size="11.5" fill="var(--muted)">postings · positions · reservations · consumer offset</text>
+  <text x="58" y="651" font-size="11.5" font-family="ui-monospace,Menlo,monospace" fill="var(--muted)">engine/outcomes.go · position.go</text>
+  <text x="392" y="620" font-size="12" fill="var(--hot)">at-least-once in,</text>
+  <text x="392" y="637" font-size="12" fill="var(--hot)">exactly-once effect</text>
+</svg>
+<figcaption>The order's whole life. Above the dashed rule is one Postgres transaction; below it,
+every stage may crash and repeat, and none of it can lose the order.</figcaption>
+</figure>
+
+<div class="key">
+  <span><i class="sw" style="background:var(--hot)"></i> synchronous · one durable transaction</span>
+  <span><i class="sw" style="background:var(--async)"></i> asynchronous · driven by the log</span>
+</div>
+
+<h2>Why a fill needs two transactions</h2>
+<p class="lede">A fill has two counterparties, and accounts are sharded across partitions — so the
+two sides usually live in different databases. There is no transaction that spans them, which is
+the single most consequential fact in the design.</p>
+
+<figure>
+<svg viewBox="0 0 760 330" role="img" aria-label="One fill in the matching engine produces two half-fill messages, keyed to two different accounts, which settle in two separate partition databases against clearing accounts; a reconciler sums both to verify the pair.">
+  <defs>
+    <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <rect x="270" y="18" width="220" height="56" rx="7" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <text x="380" y="42" font-size="13.5" font-weight="600" text-anchor="middle" fill="currentColor">ONE FILL</text>
+  <text x="380" y="61" font-size="11" font-family="ui-monospace,Menlo,monospace" text-anchor="middle" fill="var(--muted)">matching/matching.go</text>
+
+  <path d="M330,74 L175,120" stroke="currentColor" stroke-width="1.5" fill="none" marker-end="url(#b)"/>
+  <path d="M430,74 L585,120" stroke="currentColor" stroke-width="1.5" fill="none" marker-end="url(#b)"/>
+  <text x="196" y="98" font-size="11.5" text-anchor="end" fill="var(--async)">taker half</text>
+  <text x="564" y="98" font-size="11.5" fill="var(--async)">maker half</text>
+
+  <rect x="40" y="126" width="270" height="96" rx="7" fill="none" stroke="var(--hot)" stroke-width="2"/>
+  <text x="58" y="150" font-size="13" font-weight="600" fill="var(--hot)">PARTITION A — database A</text>
+  <text x="58" y="170" font-size="11.5" fill="var(--muted)">cash −(N+fee) · fees +fee</text>
+  <text x="58" y="187" font-size="11.5" fill="var(--muted)">position +qty · CLEARING +N −qty</text>
+  <text x="58" y="209" font-size="11" font-family="ui-monospace,Menlo,monospace" fill="var(--muted)">balances alone → sums to 0</text>
+
+  <rect x="450" y="126" width="270" height="96" rx="7" fill="none" stroke="var(--hot)" stroke-width="2"/>
+  <text x="468" y="150" font-size="13" font-weight="600" fill="var(--hot)">PARTITION B — database B</text>
+  <text x="468" y="170" font-size="11.5" fill="var(--muted)">cash +N</text>
+  <text x="468" y="187" font-size="11.5" fill="var(--muted)">position −qty · CLEARING −N +qty</text>
+  <text x="468" y="209" font-size="11" font-family="ui-monospace,Menlo,monospace" fill="var(--muted)">balances alone → sums to 0</text>
+
+  <line x1="175" y1="222" x2="330" y2="266" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#b)"/>
+  <line x1="585" y1="222" x2="430" y2="266" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#b)"/>
+
+  <rect x="230" y="268" width="300" height="50" rx="7" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <text x="380" y="290" font-size="13" font-weight="600" text-anchor="middle" fill="currentColor">RECONCILER — sums both, in Go</text>
+  <text x="380" y="308" font-size="11" font-family="ui-monospace,Menlo,monospace" text-anchor="middle" fill="var(--muted)">cluster/cluster.go</text>
+</svg>
+<figcaption>Each half balances on its own against a CLEARING counterparty. Their clearing legs are
+equal and opposite, so they cancel — but only when summed across databases, which is why
+conservation is a reconciler and not a SQL query.</figcaption>
+</figure>
+
+<div class="note">
+<b>The one file to read first.</b> If you only open one, make it <span class="f">internal/engine/outcomes.go</span>.
+It holds the settlement path, the offset-in-transaction commit, the double-entry legs, and the
+reservation arithmetic — every claim the system makes about money is enforced somewhere in it.
+</div>
+
+<h2>The hot path — <span class="f">internal/engine</span></h2>
+<p class="lede">The trading core. Sharded by <code>account_id</code>; owns cash, reservations,
+orders, positions, and the ledger. 2,720 lines across ten files.</p>
+<div class="tw"><table>
+<thead><tr><th>File</th><th class="n">Lines</th><th>Owns</th><th>Start reading at</th></tr></thead>
+<tbody>
+<tr><td><span class="f">submit.go</span></td><td class="n">479</td><td>The accept path: validate, size the reservation, risk check, write order + outbox row in one transaction</td><td><code>Submit</code> → <code>accept</code> → <code>sizeReservation</code></td></tr>
+<tr><td><span class="f">outcomes.go</span></td><td class="n">508</td><td>Settlement. Applies fill halves, dispositions, and cancel verdicts; commits the consumer offset in the same transaction</td><td><code>applyFillHalf</code>, <code>halfFillLegs</code></td></tr>
+<tr><td><span class="f">engine.go</span></td><td class="n">464</td><td>Accounts, deposits, balances, positions; the ledger-account resolver and the transaction wrapper that asserts the lease</td><td><code>inTx</code>, <code>writeTxn</code>, <code>lockAccount</code></td></tr>
+<tr><td><span class="f">invariants.go</span></td><td class="n">432</td><td>The verification block, plus the per-partition slice the cluster reconciler sums</td><td><code>CheckInvariants</code>, <code>ReconcileSlice</code></td></tr>
+<tr><td><span class="f">replay.go</span></td><td class="n">303</td><td>Rebuilding an account from postings alone; the canonical encoding snapshots compare with</td><td><code>ReplayAccountRange</code>, <code>Encode</code></td></tr>
+<tr><td><span class="f">lease.go</span></td><td class="n">182</td><td>Partition ownership. The epoch asserted inside every write is what fences a zombie writer</td><td><code>AcquireLease</code>, <code>assert</code></td></tr>
+<tr><td><span class="f">snapshot.go</span></td><td class="n">133</td><td>Bounded recovery: checkpoint an account, resume from snapshot + tail</td><td><code>RecoverState</code></td></tr>
+<tr><td><span class="f">cancel.go</span></td><td class="n">128</td><td>Two-phase cancel. Writes PENDING_CANCEL and the outbox row together; never releases the reservation here</td><td><code>RequestCancel</code></td></tr>
+<tr><td><span class="f">position.go</span></td><td class="n">54</td><td>Average-cost arithmetic, called by both the write path and the replayer so they cannot drift</td><td><code>applySell</code></td></tr>
+<tr><td><span class="f">observer.go</span></td><td class="n">37</td><td>The metrics seam, so the engine never imports Prometheus</td><td><code>Observer</code></td></tr>
+</tbody></table></div>
+
+<h2>The log and the wire</h2>
+<div class="tw"><table>
+<thead><tr><th>File</th><th class="n">Lines</th><th>Owns</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td><span class="f">eventlog/eventlog.go</span></td><td class="n">157</td><td>The <code>Log</code> / <code>Reader</code> interface, topic names, and the murmur2 partitioner</td><td>Core and matching agree on partitions because they call the same function</td></tr>
+<tr><td><span class="f">eventlog/pglog.go</span></td><td class="n">191</td><td>Durable log in Postgres — the default</td><td>Lets you deploy with no broker at all</td></tr>
+<tr><td><span class="f">eventlog/kafkalog.go</span></td><td class="n">201</td><td>Kafka / Redpanda via franz-go</td><td>Offsets live in Postgres, never in a consumer group</td></tr>
+<tr><td><span class="f">eventlog/memlog.go</span></td><td class="n">187</td><td>In-process log with real offsets</td><td>Tests only — see the warning below</td></tr>
+<tr><td><span class="f">events/events.go</span></td><td class="n">173</td><td>The wire contract: versioned envelopes, five message types</td><td>JSON standing in for protobuf; properties preserved</td></tr>
+<tr><td><span class="f">outbox/relay.go</span></td><td class="n">170</td><td>Tails the outbox into the log, in id order, one publisher</td><td>The alternative to 2PC across Postgres and a broker</td></tr>
+<tr><td><span class="f">ids/ids.go</span></td><td class="n">52</td><td>Deterministic UUIDv5 event identity</td><td>52 lines the entire crash-recovery story rests on</td></tr>
+</tbody></table></div>
+
+<div class="note">
+<b>The trap this map exists partly to warn about.</b> <span class="f">memlog.go</span> is not durable.
+Consumer offsets <em>are</em>. A durable cursor into a non-durable stream loses records silently —
+it stranded a live order and its reservation during testing. Use <span class="f">pglog.go</span> or
+<span class="f">kafkalog.go</span> for anything whose state outlives one process.
+</div>
+
+<h2>Matching, books, and venues</h2>
+<div class="tw"><table>
+<thead><tr><th>File</th><th class="n">Lines</th><th>Owns</th><th>Start reading at</th></tr></thead>
+<tbody>
+<tr><td><span class="f">matching/matching.go</span></td><td class="n">682</td><td>The shard service: consumes inbound, drives books, produces outcomes, snapshots per partition</td><td><code>onOrder</code>, <code>Recover</code></td></tr>
+<tr><td><span class="f">matching/router.go</span></td><td class="n">169</td><td>Smart order router — best price across venues, deterministic tie-breaks</td><td><code>route</code></td></tr>
+<tr><td><span class="f">book/book.go</span></td><td class="n">503</td><td>Price-time-priority book. Pure: no clock, no random, no network</td><td><code>Submit</code>, <code>crosses</code></td></tr>
+<tr><td><span class="f">mm/mm.go</span></td><td class="n">189</td><td>Simulated market maker — an ordinary client with an ordinary account</td><td><code>QuoteOnce</code></td></tr>
+<tr><td><span class="f">marketdata/marketdata.go</span></td><td class="n">161</td><td>Conflating tick cache and the random-walk simulator</td><td><code>Ref</code></td></tr>
+<tr><td><span class="f">money/money.go</span></td><td class="n">203</td><td>int64 minor units, 1e-6 share units, exact 128-bit scaled multiply</td><td><code>Notional</code>, <code>FeeBps</code></td></tr>
+</tbody></table></div>
+
+<h2>Cluster, wiring, and operations</h2>
+<div class="tw"><table>
+<thead><tr><th>File</th><th class="n">Lines</th><th>Owns</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td><span class="f">cluster/cluster.go</span></td><td class="n">368</td><td>Partition routing, leases, per-partition databases, and the cross-partition reconciler</td><td>Conservation stops being SQL here</td></tr>
+<tr><td><span class="f">pipeline/pipeline.go</span></td><td class="n">259</td><td>Wires every stage together; <code>Drain</code> for determinism, <code>Run</code> for production</td><td><code>Run</code> is the least-tested path in the repo</td></tr>
+<tr><td><span class="f">chaos/chaos.go</span></td><td class="n">392</td><td>Fault injection and the verification block, with an oracle external to the ledger</td><td>The headline deliverable</td></tr>
+<tr><td><span class="f">metrics/metrics.go</span></td><td class="n">237</td><td>Prometheus registry; invariant gauges separated from saturation</td><td>Paired with <code>deploy/grafana/</code></td></tr>
+<tr><td><span class="f">analytics/ingester.go</span></td><td class="n">438</td><td>Batched ClickHouse ingestion off the outcome stream</td><td>Built; never yet run against the engine</td></tr>
+<tr><td><span class="f">analytics/queries.go</span></td><td class="n">258</td><td>VWAP, top accounts, volume series, rejection rate</td><td>Never read for a financial decision</td></tr>
+<tr><td><span class="f">analytics/analytics.go</span></td><td class="n">81</td><td>Connection handling and the eventual-consistency contract</td><td></td></tr>
+<tr><td><span class="f">cmd/tradectl/main.go</span></td><td class="n">903</td><td>Every CLI command, the demo scenario, migrations, parsing</td><td>Largest file; a natural split point later</td></tr>
+<tr><td><span class="f">cmd/tradectl/serve.go</span></td><td class="n">324</td><td>The load harness: simulator, market makers, synthetic takers, <code>/metrics</code></td><td>Not yet a production daemon</td></tr>
+<tr><td><span class="f">migrations/embed.go</span></td><td class="n">58</td><td>Embeds the schema; tracked application, one transaction each</td><td></td></tr>
+</tbody></table></div>
+
+<h2>Schema — which migration creates what</h2>
+<div class="tw"><table>
+<thead><tr><th>Migration</th><th>Tables</th><th>Why it exists</th></tr></thead>
+<tbody>
+<tr><td><span class="f">0001_init.sql</span></td><td><code>accounts</code> <code>ledger_accounts</code> <code>transactions</code> <code>postings</code> <code>positions</code> <code>orders</code> <code>reservations</code> <code>fills</code> <code>account_balances</code></td><td>The ledger. Balance is asserted per (transaction, unit) by a deferred trigger</td></tr>
+<tr><td><span class="f">0002_phase2.sql</span></td><td><code>snapshots</code></td><td>Bounded recovery; reservation terms so headroom can be released per fill</td></tr>
+<tr><td><span class="f">0003_phase3.sql</span></td><td><code>outbox</code> <code>consumer_offsets</code> <code>book_snapshots</code></td><td>What replaces "and then call the book" once matching is a separate service</td></tr>
+<tr><td><span class="f">0004_phase4.sql</span></td><td><code>partition_leases</code> <code>partition_identity</code></td><td>Ownership becomes a mechanism rather than a fact</td></tr>
+<tr><td><span class="f">0005_cross_partition_fks.sql</span></td><td>—</td><td>Drops FKs that cannot span partitions. The counterparty is in another database</td></tr>
+<tr><td><span class="f">0006_order_venue.sql</span></td><td>—</td><td>A maker chooses where to rest, or multiple venues are decorative</td></tr>
+<tr><td><span class="f">0007_fills_venue.sql</span></td><td>—</td><td>Venue joins the uniqueness constraint; each venue has its own book_seq</td></tr>
+<tr><td><span class="f">0008_durable_log.sql</span></td><td><code>log_records</code> <code>log_partitions</code></td><td>The log gets the same durability as the offsets pointing into it</td></tr>
+</tbody></table></div>
+
+<h2>Tests — which file proves which property</h2>
+<div class="tw"><table>
+<thead><tr><th>File</th><th class="n">Lines</th><th>Proves</th></tr></thead>
+<tbody>
+<tr><td><span class="f">engine/rig_test.go</span></td><td class="n">322</td><td>The harness: a real pipeline over a real log. Nothing bypasses it</td></tr>
+<tr><td><span class="f">engine/phase2_test.go</span></td><td class="n">609</td><td>Reservation release per fill, cancel/fill interleavings, snapshot equivalence, cost basis from postings alone</td></tr>
+<tr><td><span class="f">engine/phase3_test.go</span></td><td class="n">333</td><td>Duplicate publish, outcome redelivery, matching restart, offset tracking, relay ordering</td></tr>
+<tr><td><span class="f">engine/engine_test.go</span></td><td class="n">366</td><td>Bilateral settlement, idempotent client order ids, concurrent overdraft, collar bounds</td></tr>
+<tr><td><span class="f">cluster/cluster_test.go</span></td><td class="n">363</td><td>A fill across two databases reconciles; a stranded half is caught</td></tr>
+<tr><td><span class="f">engine/phase5_test.go</span></td><td class="n">167</td><td>The router takes best price across venues; identities stay unique</td></tr>
+<tr><td><span class="f">engine/lease_test.go</span></td><td class="n">148</td><td>A writer that lost its lease cannot commit on any path</td></tr>
+<tr><td><span class="f">book/book_test.go</span></td><td class="n">255</td><td>Price-time priority, collars, replay produces identical fill identities</td></tr>
+<tr><td><span class="f">money/money_test.go</span></td><td class="n">141</td><td>Ceil bounds floor, fees telescope, overflow is reported not wrapped</td></tr>
+</tbody></table></div>
+
+<div class="note">
+<b>Known gap worth seeing on the map.</b> Every test above drives <code>Drain()</code> — pump until
+quiet. Production drives <code>Run()</code> — background loops. That asymmetry is why the bugs found
+by using the CLI by hand were invisible to 2,700 lines of tests.
+</div>
+
+</div>

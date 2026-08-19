@@ -462,3 +462,8 @@ func ledgerAccount(ctx context.Context, tx pgx.Tx, account uuid.UUID, kind, symb
 	}
 	return id, nil
 }
+
+// Pool exposes the connection pool for callers that legitimately need it outside the
+// engine's own operations — applying migrations at boot, and answering a readiness probe.
+// Nothing in the trading path should reach for this.
+func (e *Engine) Pool() *pgxpool.Pool { return e.pool }

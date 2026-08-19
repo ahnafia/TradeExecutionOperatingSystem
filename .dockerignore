@@ -1,0 +1,10 @@
+.git
+.gitignore
+docs
+deploy
+*.md
+Makefile
+docker-compose.yml
+Dockerfile
+.dockerignore
+*_test.go

@@ -50,11 +50,23 @@ func defaultServeConfig() serveConfig {
 // system that is actually working.
 func serve(ctx context.Context, pl *pipeline.Pipeline, md *marketdata.Cache, args []string) error {
 	cfg := defaultServeConfig()
+	// A managed host tells you which port to bind and will consider the deploy failed if
+	// you bind a different one. An explicit argument still wins, for local use.
+	if p := os.Getenv("PORT"); p != "" {
+		cfg.addr = ":" + p
+	}
 	if len(args) > 0 && args[0] != "" {
 		cfg.addr = args[0]
 		if !strings.Contains(cfg.addr, ":") {
 			cfg.addr = ":" + cfg.addr
 		}
+	}
+
+	// Apply the schema at boot. On a managed host there is no convenient shell to run
+	// migrations from, and a container that starts against an unmigrated database fails in
+	// a way that looks like a code bug rather than a missing step.
+	if err := migrate(ctx, pl.Engine.Pool()); err != nil {
+		return fmt.Errorf("migrate on boot: %w", err)
 	}
 
 	eng := pl.Engine
@@ -125,6 +137,26 @@ func serve(ctx context.Context, pl *pipeline.Pipeline, md *marketdata.Cache, arg
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", m.Handler())
+
+	// Liveness: the process is up. Deliberately does NOT touch the database — a health
+	// check that fails when Postgres blips gets the container killed and restarted, which
+	// is the worst possible response to a database that is already struggling.
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprintln(w, "ok")
+	})
+
+	// Readiness: can this instance actually serve? Separate from liveness precisely so a
+	// struggling dependency takes it out of rotation without taking it out of existence.
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if err := pl.Engine.Pool().Ping(r.Context()); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintf(w, "database unreachable: %v\n", err)
+			return
+		}
+		fmt.Fprintln(w, "ready")
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
