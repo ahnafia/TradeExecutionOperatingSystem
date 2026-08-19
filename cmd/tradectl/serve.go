@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ahnafia/trading-system/internal/api"
 	"github.com/ahnafia/trading-system/internal/book"
 	"github.com/ahnafia/trading-system/internal/engine"
 	"github.com/ahnafia/trading-system/internal/marketdata"
@@ -34,7 +35,7 @@ type serveConfig struct {
 func defaultServeConfig() serveConfig {
 	return serveConfig{
 		addr:          ":9464",
-		symbols:       []string{"ACME", "BETA", "CRUX"},
+		symbols:       []string{"AAPL", "GOOGL", "MSFT"},
 		takers:        4,
 		orderInterval: 40 * time.Millisecond,
 		snapshotEvery: 10 * time.Second,
@@ -75,7 +76,7 @@ func serve(ctx context.Context, pl *pipeline.Pipeline, md *marketdata.Cache, arg
 
 	seed := make(map[string]money.Minor, len(cfg.symbols))
 	for i, s := range cfg.symbols {
-		seed[s] = money.Minor(5_000 + i*9_100)
+		seed[s] = money.Minor(18_500 + i*4_200)
 	}
 	sim := marketdata.NewSimulator(md, seed, 200*time.Millisecond, 12, 7)
 
@@ -105,11 +106,57 @@ func serve(ctx context.Context, pl *pipeline.Pipeline, md *marketdata.Cache, arg
 	market := mm.New(eng, md, maker, cfg.symbols, mm.DefaultConfig())
 	spawn(func() { market.Run(ctx, stop) })
 
-	for i, t := range takers {
-		taker := t
-		seedN := int64(i)
-		spawn(func() { driveTaker(ctx, eng, cfg, taker, seedN) })
+	// Synthetic takers exist to give the invariant gauges something to move. On a public
+	// deployment the real users ARE the takers, and robots trading against them would both
+	// pollute the market and fill the order table with rejections nobody caused.
+	if os.Getenv("TRADING_SYNTHETIC_LOAD") != "" {
+		for i, t := range takers {
+			taker := t
+			seedN := int64(i)
+			spawn(func() { driveTaker(ctx, eng, cfg, taker, seedN) })
+		}
+		fmt.Println("  synthetic taker load: ON (TRADING_SYNTHETIC_LOAD)")
 	}
+
+	// Publish a mark for every symbol that has a book, derived from its own midpoint.
+	//
+	// This is a simulated exchange: there is no external feed, so the market IS the book.
+	// The random walk only bootstraps the symbols the market makers quote; any symbol a
+	// user invents gets its reference price from the liquidity actually resting in it.
+	// Without this, a market order in a user-created symbol is rejected forever — the
+	// collar has nothing to be sized against — even though the book is two-sided and
+	// perfectly tradeable.
+	spawn(func() {
+		t := time.NewTicker(500 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				for _, sym := range pl.Matching.Symbols() {
+					b := pl.Matching.Book(sym)
+					if b == nil {
+						continue
+					}
+					bid, hasBid := b.BestBid()
+					ask, hasAsk := b.BestAsk()
+					var mark money.Minor
+					switch {
+					case hasBid && hasAsk:
+						mark = (bid + ask) / 2
+					case hasAsk:
+						mark = ask
+					case hasBid:
+						mark = bid
+					default:
+						continue
+					}
+					md.Publish(marketdata.Tick{Symbol: sym, Price: mark, At: time.Now()})
+				}
+			}
+		}
+	})
 
 	spawn(func() {
 		m.RefreshLoop(ctx, eng, cfg.refreshEvery, func(err error) {
@@ -135,7 +182,12 @@ func serve(ctx context.Context, pl *pipeline.Pipeline, md *marketdata.Cache, arg
 		}
 	})
 
+	// The trading API: the only way anything other than the CLI reaches the engine.
+	apiSrv := api.New(pl, api.DefaultConfig())
+	apiSrv.Start(ctx)
+
 	mux := http.NewServeMux()
+	mux.Handle("/api/", apiSrv.Handler())
 	mux.Handle("/metrics", m.Handler())
 
 	// Liveness: the process is up. Deliberately does NOT touch the database — a health
@@ -174,7 +226,9 @@ func serve(ctx context.Context, pl *pipeline.Pipeline, md *marketdata.Cache, arg
 		_ = srv.Shutdown(shutdown)
 	}()
 
-	fmt.Printf("engine running · %d symbols · %d takers\n", len(cfg.symbols), cfg.takers)
+	fmt.Printf("engine running · %d symbols · market makers quoting\n", len(cfg.symbols))
+	fmt.Printf("  api      http://localhost%s/api/\n", cfg.addr)
+	fmt.Printf("  fills    http://localhost%s/api/fills   (SSE)\n", cfg.addr)
 	fmt.Printf("  metrics  http://localhost%s/metrics\n", cfg.addr)
 	fmt.Printf("  status   http://localhost%s/\n", cfg.addr)
 	fmt.Println("ctrl-c to stop")

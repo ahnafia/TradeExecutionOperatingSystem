@@ -477,3 +477,63 @@ func (e *Engine) OrderFills(ctx context.Context, orderID uuid.UUID) ([]FillRow, 
 	}
 	return out, rows.Err()
 }
+
+// OpenOrderCount is how many of an account's orders are still working.
+//
+// It backs a per-account cap on resting orders. That cap is about the ENGINE, not the
+// transport: every resting order occupies memory in a book and a row the risk check reads,
+// so an account with thousands of them costs everyone. A request rate limit would not
+// catch it — an account can reach the same state slowly.
+func (e *Engine) OpenOrderCount(ctx context.Context, account uuid.UUID) (int, error) {
+	var n int
+	err := e.pool.QueryRow(ctx, `
+		SELECT count(*) FROM orders
+		 WHERE account_id = $1 AND status IN ('ACCEPTED','PARTIALLY_FILLED','PENDING_CANCEL')`,
+		account).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("open order count: %w", err)
+	}
+	return n, nil
+}
+
+// RecentOrders lists an account's most recent orders, newest first.
+func (e *Engine) RecentOrders(ctx context.Context, account uuid.UUID, limit int) ([]OrderView, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := e.pool.Query(ctx, `
+		SELECT id, account_id, symbol, side, type, tif, qty, limit_price, ref_price,
+		       status, reject_reason, filled_qty, filled_notional, client_order_id
+		  FROM orders WHERE account_id = $1 ORDER BY seq_no DESC LIMIT $2`, account, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent orders: %w", err)
+	}
+	defer rows.Close()
+
+	var out []OrderView
+	for rows.Next() {
+		var (
+			v                    OrderView
+			side, typ, tif       string
+			limitPrice, refPrice *int64
+			rejectReason         *string
+		)
+		if err := rows.Scan(&v.ID, &v.AccountID, &v.Symbol, &side, &typ, &tif, &v.Qty,
+			&limitPrice, &refPrice, &v.Status, &rejectReason, &v.FilledQty,
+			&v.FilledNotional, &v.ClientOrderID); err != nil {
+			return nil, err
+		}
+		v.Side, v.Type, v.TIF = parseSide(side), parseType(typ), parseTIF(tif)
+		if limitPrice != nil {
+			v.LimitPrice = money.Minor(*limitPrice)
+		}
+		if refPrice != nil {
+			v.RefPrice = money.Minor(*refPrice)
+		}
+		if rejectReason != nil {
+			v.RejectReason = *rejectReason
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}

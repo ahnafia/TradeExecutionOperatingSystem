@@ -15,6 +15,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -36,6 +37,10 @@ type Config struct {
 	RelayBatch        int
 	KafkaSeeds        []string // non-empty selects a broker
 
+	// Unfenced skips the singleton lease. Only correct where exactly one process can
+	// exist by construction: a test, or a chaos run that owns its whole database.
+	Unfenced bool
+
 	// Ephemeral selects the in-process log. It is ONLY correct when one process owns the
 	// whole lifetime of the data — a test, or a single run of chaos. Any deployment where
 	// state outlives the process needs a durable log, because consumer offsets are durable
@@ -55,10 +60,23 @@ func DefaultConfig() Config {
 	}
 }
 
+// PrimaryLease names the singleton role: relay, matching, and outcome consumers.
+//
+// They are one role rather than three because they must not be split across processes.
+// A relay in one process and a matching engine in another would work, but a second
+// matching engine anywhere is corruption, and one name is far harder to get wrong.
+const PrimaryLease = "engine-primary"
+
 // Pipeline owns every stage and the log between them.
 type Pipeline struct {
-	pool      *pgxpool.Pool
-	Cfg       Config
+	pool *pgxpool.Pool
+	Cfg  Config
+
+	// Primary is true when this process holds the lease and therefore drives the
+	// pipeline. A process that does not hold it can still ACCEPT orders — that path is
+	// fenced per-partition and is safe from anywhere — but it must not run the loops.
+	Primary   bool
+	lease     *engine.ServiceLease
 	Log       eventlog.Log
 	Engine    *engine.Engine
 	Relay     *outbox.Relay
@@ -111,10 +129,25 @@ func New(ctx context.Context, pool *pgxpool.Pool, md *marketdata.Cache, cfg Conf
 		consumers = append(consumers, c)
 	}
 
-	return &Pipeline{
+	p := &Pipeline{
 		pool: pool, Cfg: cfg, Log: log, Engine: eng, Relay: relay,
 		Matching: match, Consumers: consumers,
-	}, nil
+	}
+
+	// Claim the right to drive the pipeline. Refused means another process is already
+	// doing it, which is the normal state for a CLI invocation against a running server
+	// and for the old instance during a rolling deploy.
+	if !cfg.Unfenced {
+		lease, got, err := engine.AcquireService(ctx, pool, PrimaryLease, engine.LeaseTTL)
+		if err != nil {
+			log.Close()
+			return nil, err
+		}
+		p.Primary, p.lease = got, lease
+	} else {
+		p.Primary = true
+	}
+	return p, nil
 }
 
 // Drain pumps every stage until nothing moves.
@@ -124,6 +157,12 @@ func New(ctx context.Context, pool *pgxpool.Pool, md *marketdata.Cache, cfg Conf
 // verdict can arrive after the fills it lost to. Quiescence is the only correct stopping
 // condition, and reaching it is what makes an asynchronous pipeline deterministic to test.
 func (p *Pipeline) Drain(ctx context.Context) error {
+	// Another process is driving. Pumping the stages here would be a second matching
+	// engine — the exact thing the lease exists to prevent — so wait for the holder to do
+	// the work instead of doing it ourselves.
+	if !p.Primary {
+		return p.waitForPrimary(ctx)
+	}
 	const maxRounds = 1000
 	for round := 0; round < maxRounds; round++ {
 		moved := 0
@@ -153,6 +192,59 @@ func (p *Pipeline) Drain(ctx context.Context) error {
 	return fmt.Errorf("pipeline did not settle after %d rounds", maxRounds)
 }
 
+// waitForPrimary blocks until the process holding the lease has caught up: the outbox is
+// drained and every outcome partition has been consumed to its end.
+func (p *Pipeline) waitForPrimary(ctx context.Context) error {
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		backlog, _, err := p.Relay.Lag(ctx)
+		if err != nil {
+			return err
+		}
+		caughtUp, err := p.outcomesCaughtUp(ctx)
+		if err != nil {
+			return err
+		}
+		if backlog == 0 && caughtUp {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for the primary process to settle "+
+				"(outbox backlog %d); is it running?", backlog)
+		}
+		time.Sleep(60 * time.Millisecond)
+	}
+}
+
+// outcomesCaughtUp reports whether every outcome partition has been consumed to its end.
+func (p *Pipeline) outcomesCaughtUp(ctx context.Context) (bool, error) {
+	pg, ok := p.Log.(*eventlog.PgLog)
+	if !ok {
+		return true, nil // only the durable log is shared between processes
+	}
+	for i := int32(0); i < p.Log.Partitions(eventlog.TopicOrdersOutcomes); i++ {
+		end, err := pg.Len(ctx, eventlog.TopicOrdersOutcomes, i)
+		if err != nil {
+			return false, err
+		}
+		var next int64
+		err = p.pool.QueryRow(ctx, `
+			SELECT coalesce(max(next_offset), 0) FROM consumer_offsets
+			 WHERE consumer_group = $1 AND topic = $2 AND partition = $3`,
+			engine.ConsumerGroup, eventlog.TopicOrdersOutcomes, i).Scan(&next)
+		if err != nil {
+			return false, err
+		}
+		if next < end {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // Settle drains the pipeline and then checkpoints the books.
 //
 // The checkpoint is what keeps a short-lived process cheap. A matching shard recovers from
@@ -163,11 +255,60 @@ func (p *Pipeline) Settle(ctx context.Context) error {
 	if err := p.Drain(ctx); err != nil {
 		return err
 	}
+	if !p.Primary {
+		return nil // the holder owns the books, and therefore owns their snapshots
+	}
 	return p.Matching.SnapshotAll(ctx)
 }
 
-// Run starts every stage in the background.
+// Run drives the pipeline, waiting for the right to do so if another process has it.
+//
+// The waiting is the important part and it is not optional. An instance that failed to
+// acquire once and gave up would serve HTTP forever while never matching a single order —
+// which is exactly what happens on any restart inside the lease TTL, including every
+// rolling deploy. So a process that starts as a client keeps asking, and promotes itself
+// the moment the previous holder releases or expires.
 func (p *Pipeline) Run(ctx context.Context, onErr func(error)) {
+	if p.Primary {
+		p.startLoops(ctx, onErr)
+		return
+	}
+	go p.awaitPromotion(ctx, onErr)
+}
+
+// awaitPromotion polls for the lease until it is free, then starts driving.
+func (p *Pipeline) awaitPromotion(ctx context.Context, onErr func(error)) {
+	// A third of the TTL: fast enough that a handover is not noticeable, slow enough that
+	// a standby is not hammering the table.
+	t := time.NewTicker(engine.LeaseTTL / 3)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		lease, got, err := engine.AcquireService(ctx, p.pool, PrimaryLease, engine.LeaseTTL)
+		if err != nil {
+			if onErr != nil && ctx.Err() == nil {
+				onErr(err)
+			}
+			continue
+		}
+		if !got {
+			continue
+		}
+		p.lease, p.Primary = lease, true
+		slog.Info("promoted to primary; driving relay, matching, and settlement")
+		p.startLoops(ctx, onErr)
+		return
+	}
+}
+
+func (p *Pipeline) startLoops(ctx context.Context, onErr func(error)) {
+	if p.lease != nil {
+		go p.lease.RunRenewer(ctx, onErr)
+	}
 	go p.Relay.Run(ctx, 20*time.Millisecond, onErr)
 	go p.Matching.Run(ctx, 20*time.Millisecond, onErr)
 	for _, c := range p.Consumers {
@@ -179,6 +320,12 @@ func (p *Pipeline) Run(ctx context.Context, onErr func(error)) {
 func (p *Pipeline) Close() error {
 	for _, c := range p.Consumers {
 		_ = c.Close()
+	}
+	// Releasing rather than letting it expire is what makes a handover take milliseconds
+	// instead of a full TTL, which is the difference between a rolling deploy that stalls
+	// the market for ten seconds and one nobody notices.
+	if p.lease != nil {
+		_ = p.lease.Release(context.WithoutCancel(context.Background()))
 	}
 	return p.Log.Close()
 }

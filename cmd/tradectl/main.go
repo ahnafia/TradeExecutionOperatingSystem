@@ -151,6 +151,10 @@ func run() error {
 // unset and the same code runs over an in-process log with identical semantics.
 func newPipeline(ctx context.Context, pool *pgxpool.Pool, md *marketdata.Cache) (*pipeline.Pipeline, error) {
 	cfg := pipeline.DefaultConfig()
+	// A chaos run owns its whole database and drives every stage itself.
+	if len(os.Args) > 1 && os.Args[1] == "chaos" {
+		cfg.Unfenced = true
+	}
 	if seeds := os.Getenv("TRADING_KAFKA"); seeds != "" {
 		if seeds == "1" || seeds == "true" {
 			seeds = defaultKafka
@@ -830,50 +834,8 @@ func transportName(pl *pipeline.Pipeline) string {
 
 func dollars(n int64) money.Minor { return money.Minor(n * 100) }
 
-// parseMinor reads a decimal amount into minor units without ever touching a float.
-func parseMinor(s string) (money.Minor, error) {
-	s = strings.TrimSpace(strings.TrimPrefix(strings.ReplaceAll(s, ",", ""), "$"))
-	neg := strings.HasPrefix(s, "-")
-	s = strings.TrimPrefix(s, "-")
-
-	whole, frac, _ := strings.Cut(s, ".")
-	if whole == "" {
-		whole = "0"
-	}
-	w, err := strconv.ParseInt(whole, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("bad amount %q", s)
-	}
-	frac = (frac + "00")[:2]
-	f, err := strconv.ParseInt(frac, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("bad amount %q", s)
-	}
-	out := money.Minor(w*100 + f)
-	if neg {
-		out = -out
-	}
-	return out, nil
-}
-
-// parseQty reads a share count into 1e-6 share units.
-func parseQty(s string) (money.Qty, error) {
-	s = strings.TrimSpace(strings.ReplaceAll(s, ",", ""))
-	whole, frac, _ := strings.Cut(s, ".")
-	if whole == "" {
-		whole = "0"
-	}
-	w, err := strconv.ParseInt(whole, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("bad quantity %q", s)
-	}
-	frac = (frac + "000000")[:6]
-	f, err := strconv.ParseInt(frac, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("bad quantity %q", s)
-	}
-	return money.Qty(w*money.QtyScale + f), nil
-}
+func parseMinor(s string) (money.Minor, error) { return money.ParseMinor(s) }
+func parseQty(s string) (money.Qty, error)     { return money.ParseQty(s) }
 
 // runChaos executes a fault-injection run and prints the verification block.
 //

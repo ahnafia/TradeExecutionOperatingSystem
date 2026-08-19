@@ -180,3 +180,101 @@ func (e *Engine) AssertOwnership(ctx context.Context, partitionID int) error {
 	}
 	return nil
 }
+
+// ServiceLease is a singleton claim on a role that must have exactly one live holder.
+//
+// It differs from a partition lease in the one way that matters. A partition lease is
+// STOLEN — the newcomer always wins, and the previous holder is fenced when its epoch
+// assertion fails inside a write transaction. That works because every core write goes
+// through a transaction that can be made to fail.
+//
+// The matching engine and the outbox relay have no such choke point: their output is a
+// produce to a log, which no database assertion can veto after the fact. So for them,
+// prevention is the only available mechanism, and acquisition REFUSES rather than steals
+// while a holder is alive.
+type ServiceLease struct {
+	pool    *pgxpool.Pool
+	name    string
+	ownerID uuid.UUID
+	epoch   int64
+	ttl     time.Duration
+}
+
+// AcquireService claims a named role, or reports that someone else holds it.
+//
+// A false return is not an error: it means another process is already doing this job and
+// this one should behave as a client. Treating it as a failure would make a second
+// instance crash-loop during a rolling deploy instead of waiting its turn.
+func AcquireService(ctx context.Context, pool *pgxpool.Pool, name string, ttl time.Duration) (*ServiceLease, bool, error) {
+	if ttl <= 0 {
+		ttl = LeaseTTL
+	}
+	owner := uuid.New()
+
+	var epoch int64
+	err := pool.QueryRow(ctx, `
+		INSERT INTO service_leases (name, owner_id, epoch, expires_at)
+		VALUES ($1, $2, 1, now() + make_interval(secs => $3))
+		ON CONFLICT (name) DO UPDATE
+		   SET owner_id = EXCLUDED.owner_id,
+		       epoch    = service_leases.epoch + 1,
+		       acquired_at = now(),
+		       expires_at  = EXCLUDED.expires_at
+		 WHERE service_leases.expires_at < now()
+		RETURNING epoch`, name, owner, ttl.Seconds()).Scan(&epoch)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil // a live holder exists; this process is a client
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("acquire service lease %q: %w", name, err)
+	}
+	return &ServiceLease{pool: pool, name: name, ownerID: owner, epoch: epoch, ttl: ttl}, true, nil
+}
+
+// Renew extends the claim, reporting ErrLeaseLost if it was taken after expiry.
+func (l *ServiceLease) Renew(ctx context.Context) error {
+	tag, err := l.pool.Exec(ctx, `
+		UPDATE service_leases SET expires_at = now() + make_interval(secs => $3)
+		 WHERE name = $1 AND owner_id = $2 AND epoch = $4`,
+		l.name, l.ownerID, l.ttl.Seconds(), l.epoch)
+	if err != nil {
+		return fmt.Errorf("renew service lease: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("service lease %q taken: %w", l.name, ErrLeaseLost)
+	}
+	return nil
+}
+
+// RunRenewer keeps the claim alive until the context is cancelled.
+func (l *ServiceLease) RunRenewer(ctx context.Context, onLost func(error)) {
+	t := time.NewTicker(l.ttl / 3)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := l.Renew(ctx); err != nil && ctx.Err() == nil {
+				if onLost != nil {
+					onLost(err)
+				}
+				if errors.Is(err, ErrLeaseLost) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// Release gives up the claim so a successor need not wait out the TTL. This is what makes
+// a rolling deploy hand over in milliseconds rather than in LeaseTTL.
+func (l *ServiceLease) Release(ctx context.Context) error {
+	_, err := l.pool.Exec(ctx,
+		`DELETE FROM service_leases WHERE name = $1 AND owner_id = $2 AND epoch = $3`,
+		l.name, l.ownerID, l.epoch)
+	return err
+}
+
+// Name is the role this lease covers.
+func (l *ServiceLease) Name() string { return l.name }

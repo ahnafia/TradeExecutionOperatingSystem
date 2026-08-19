@@ -201,3 +201,65 @@ func Add(a, b Minor) (Minor, bool) {
 	}
 	return s, true
 }
+
+// ParseMinor reads a decimal amount ("150.25", "$1,900") into minor units.
+//
+// It never touches a float. A float parse of "150.25" is already wrong before any
+// arithmetic happens, and in a ledger that error compounds silently — so the decimal
+// point is handled by splitting the string, not by binary floating point.
+func ParseMinor(s string) (Minor, error) {
+	s = strings.TrimSpace(strings.TrimPrefix(strings.ReplaceAll(s, ",", ""), "$"))
+	neg := strings.HasPrefix(s, "-")
+	s = strings.TrimPrefix(s, "-")
+
+	whole, frac, _ := strings.Cut(s, ".")
+	if whole == "" {
+		whole = "0"
+	}
+	w, err := strconv.ParseInt(whole, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("bad amount %q", s)
+	}
+	if len(frac) > 2 {
+		return 0, fmt.Errorf("amount %q has more than two decimal places", s)
+	}
+	frac = (frac + "00")[:2]
+	f, err := strconv.ParseInt(frac, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("bad amount %q", s)
+	}
+	out := Minor(w*100 + f)
+	if neg {
+		out = -out
+	}
+	return out, nil
+}
+
+// ParseQty reads a share count into 1e-6 share units.
+func ParseQty(s string) (Qty, error) {
+	s = strings.TrimSpace(strings.ReplaceAll(s, ",", ""))
+	neg := strings.HasPrefix(s, "-")
+	s = strings.TrimPrefix(s, "-")
+
+	whole, frac, _ := strings.Cut(s, ".")
+	if whole == "" {
+		whole = "0"
+	}
+	w, err := strconv.ParseInt(whole, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("bad quantity %q", s)
+	}
+	if len(frac) > 6 {
+		return 0, fmt.Errorf("quantity %q is finer than 1e-6 shares", s)
+	}
+	frac = (frac + "000000")[:6]
+	f, err := strconv.ParseInt(frac, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("bad quantity %q", s)
+	}
+	out := Qty(w*QtyScale + f)
+	if neg {
+		out = -out
+	}
+	return out, nil
+}
