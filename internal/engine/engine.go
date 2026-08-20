@@ -38,7 +38,7 @@ func DefaultConfig() Config {
 		CollarBps:       500, // 5%
 		TakerFeeBps:     5,
 		MakerFeeBps:     0,
-		DedupWindow:     1 << 20,
+		DedupWindow:     1 << 16, // see matching.defaultDedupWindow for the sizing argument
 		MaxRefStaleness: 5 * time.Second,
 		SettleWindow:    5 * time.Second,
 	}

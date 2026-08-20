@@ -53,13 +53,24 @@ type Config struct {
 	Venues []Venue
 }
 
+// defaultDedupWindow is how many terminated order ids a book remembers.
+//
+// It only has to exceed the outbox relay's worst lag — the window in which a republished
+// record could still arrive — not the number of orders in a day. Relay lag is monitored
+// and is normally milliseconds, so 65k is already several orders of magnitude of headroom.
+//
+// The previous value of 1<<20 was chosen for a benchmark and never revisited. It is
+// allocated once per book and once per partition, so on a three-symbol deployment it was
+// seven copies of a structure sized for a million entries.
+const defaultDedupWindow = 1 << 16
+
 // DefaultConfig is a single shard owning every partition.
 func DefaultConfig() Config {
 	return Config{
 		ShardID:       0,
 		ShardCount:    1,
 		CollarBps:     500,
-		DedupWindow:   1 << 20,
+		DedupWindow:   defaultDedupWindow,
 		SnapshotEvery: 500,
 		BatchSize:     256,
 		Venues:        DefaultVenues(),

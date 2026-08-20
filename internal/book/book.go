@@ -174,13 +174,19 @@ func New(symbol, venue string, shardID int, collarBps int64, dedupWindow int) *B
 		venue = DefaultVenue
 	}
 	return &Book{
-		Symbol:     symbol,
-		Venue:      venue,
-		ShardID:    shardID,
-		CollarBps:  collarBps,
-		byID:       make(map[uuid.UUID]*Order),
-		dedupRing:  make([]uuid.UUID, dedupWindow),
-		dedupSet:   make(map[uuid.UUID]struct{}, dedupWindow),
+		Symbol:    symbol,
+		Venue:     venue,
+		ShardID:   shardID,
+		CollarBps: collarBps,
+		byID:      make(map[uuid.UUID]*Order),
+		dedupRing: make([]uuid.UUID, dedupWindow),
+		// The map is NOT pre-sized to the window. Pre-allocating buckets for a million
+		// entries costs about ninety megabytes per book whether or not a single order ever
+		// arrives, and this structure exists once per book AND once per partition — which
+		// is how an idle process came to hold 446 MB and get killed on a 512 MB instance.
+		// The ring already bounds how many entries can exist, so the map is free to grow
+		// into that bound and no further.
+		dedupSet:   make(map[uuid.UUID]struct{}),
 		dedupLimit: dedupWindow,
 	}
 }
