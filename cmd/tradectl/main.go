@@ -102,6 +102,22 @@ func run() error {
 		return fmt.Errorf("database unreachable at %s (is `docker compose up -d` running?): %w", dsn, err)
 	}
 
+	// Apply the schema BEFORE anything reads it.
+	//
+	// Building the pipeline touches log_partitions, book_snapshots, and consumer_offsets
+	// on the way up, so a migration that runs after it is a migration that runs too late.
+	// This only ever fails against a genuinely empty database, which is why it survived
+	// every local run and died on the first real deploy.
+	//
+	// Only serve migrates automatically. It is the deployed entrypoint and owns the
+	// schema; a CLI invocation from a newer build must not silently migrate a database
+	// out from under a running server.
+	if cmd == "serve" {
+		if err := migrate(ctx, pool); err != nil {
+			return fmt.Errorf("migrate on boot: %w", err)
+		}
+	}
+
 	md := marketdata.NewCache()
 	pl, err := newPipeline(ctx, pool, md)
 	if err != nil {

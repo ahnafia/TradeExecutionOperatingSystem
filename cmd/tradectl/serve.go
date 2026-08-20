@@ -63,13 +63,6 @@ func serve(ctx context.Context, pl *pipeline.Pipeline, md *marketdata.Cache, arg
 		}
 	}
 
-	// Apply the schema at boot. On a managed host there is no convenient shell to run
-	// migrations from, and a container that starts against an unmigrated database fails in
-	// a way that looks like a code bug rather than a missing step.
-	if err := migrate(ctx, pl.Engine.Pool()); err != nil {
-		return fmt.Errorf("migrate on boot: %w", err)
-	}
-
 	eng := pl.Engine
 	m := metrics.New()
 	eng.Observe(m)
