@@ -28,7 +28,7 @@ import (
 // should be cheap to reject, and putting auth first would make every junk request pay for
 // a session lookup.
 func chain(h http.Handler, deps *Server) http.Handler {
-	return recoverer(requestID(logging(rateLimit(deps, authenticate(deps, h)))))
+	return recoverer(requestID(cors(deps, logging(rateLimit(deps, authenticate(deps, h))))))
 }
 
 type ctxKey string

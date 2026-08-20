@@ -63,6 +63,9 @@ type Server struct {
 
 	// trustHeader enables the Part 1 bypass. Off unless asked for by name.
 	trustHeader bool
+
+	// origins is the frontend's origin(s), when it is served from elsewhere.
+	origins []string
 }
 
 // New builds the API. Call Start to begin tailing the outcome log.
@@ -76,6 +79,7 @@ func New(pl *pipeline.Pipeline, cfg Config) *Server {
 		// indefinitely and consume a connection slot.
 		http:        &http.Client{Timeout: 10 * time.Second},
 		trustHeader: os.Getenv("TRADING_TRUST_HEADER") == "1",
+		origins:     frontendOrigins(),
 	}
 }
 
@@ -125,12 +129,23 @@ func (s *Server) Handler() http.Handler {
 // Accounts are provisioned by logging in, not by a separate signup call. One fewer way to
 // come into existence means one fewer way to come into existence unauthenticated.
 
+// Money and quantities are returned twice: a formatted string for display, and the raw
+// integer for arithmetic. A frontend that only had "-$28.08" would have to parse it back
+// out to decide whether to colour the number red, and parsing your own display format is
+// how rounding bugs get reintroduced at the edge.
+//
+// Cents for money, millionths of a share for quantity — the same units the ledger uses,
+// so nothing is lost on the way out.
 type meResp struct {
-	AccountID   string `json:"account_id"`
-	Cash        string `json:"cash"`
-	Reserved    string `json:"reserved"`
-	BuyingPower string `json:"buying_power"`
-	FeesPaid    string `json:"fees_paid"`
+	AccountID        string `json:"account_id"`
+	Cash             string `json:"cash"`
+	CashMinor        int64  `json:"cash_minor"`
+	Reserved         string `json:"reserved"`
+	ReservedMinor    int64  `json:"reserved_minor"`
+	BuyingPower      string `json:"buying_power"`
+	BuyingPowerMinor int64  `json:"buying_power_minor"`
+	FeesPaid         string `json:"fees_paid"`
+	FeesPaidMinor    int64  `json:"fees_paid_minor"`
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -144,8 +159,11 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, meResp{
-		AccountID: account.String(), Cash: b.Cash.String(), Reserved: b.ReservedCash.String(),
-		BuyingPower: b.BuyingPower.String(), FeesPaid: b.Fees.String(),
+		AccountID: account.String(),
+		Cash:      b.Cash.String(), CashMinor: int64(b.Cash),
+		Reserved: b.ReservedCash.String(), ReservedMinor: int64(b.ReservedCash),
+		BuyingPower: b.BuyingPower.String(), BuyingPowerMinor: int64(b.BuyingPower),
+		FeesPaid: b.Fees.String(), FeesPaidMinor: int64(b.Fees),
 	})
 }
 
@@ -156,8 +174,10 @@ func (s *Server) handleSymbols(w http.ResponseWriter, r *http.Request) {
 }
 
 type level struct {
-	Price string `json:"price"`
-	Qty   string `json:"qty"`
+	Price      string `json:"price"`
+	PriceMinor int64  `json:"price_minor"`
+	Qty        string `json:"qty"`
+	QtyUnits   int64  `json:"qty_units"`
 }
 
 func (s *Server) handleBook(w http.ResponseWriter, r *http.Request) {
@@ -173,7 +193,10 @@ func (s *Server) handleBook(w http.ResponseWriter, r *http.Request) {
 	out := func(src []book.DepthLevel) []level {
 		res := make([]level, 0, len(src))
 		for _, l := range src {
-			res = append(res, level{Price: l.Price.String(), Qty: l.Qty.String()})
+			res = append(res, level{
+				Price: l.Price.String(), PriceMinor: int64(l.Price),
+				Qty: l.Qty.String(), QtyUnits: int64(l.Qty),
+			})
 		}
 		return res
 	}
@@ -403,13 +426,18 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 // --- positions --------------------------------------------------------------
 
 type positionResp struct {
-	Symbol     string `json:"symbol"`
-	Qty        string `json:"qty"`
-	Reserved   string `json:"reserved"`
-	CostBasis  string `json:"cost_basis"`
-	Mark       string `json:"mark,omitempty"`
-	Realized   string `json:"realized_pnl"`
-	Unrealized string `json:"unrealized_pnl,omitempty"`
+	Symbol          string `json:"symbol"`
+	Qty             string `json:"qty"`
+	QtyUnits        int64  `json:"qty_units"`
+	Reserved        string `json:"reserved"`
+	CostBasis       string `json:"cost_basis"`
+	CostBasisMinor  int64  `json:"cost_basis_minor"`
+	Mark            string `json:"mark,omitempty"`
+	MarkMinor       int64  `json:"mark_minor,omitempty"`
+	Realized        string `json:"realized_pnl"`
+	RealizedMinor   int64  `json:"realized_pnl_minor"`
+	Unrealized      string `json:"unrealized_pnl,omitempty"`
+	UnrealizedMinor int64  `json:"unrealized_pnl_minor"`
 }
 
 func (s *Server) handlePositions(w http.ResponseWriter, r *http.Request) {
@@ -425,11 +453,14 @@ func (s *Server) handlePositions(w http.ResponseWriter, r *http.Request) {
 	out := make([]positionResp, 0, len(pos))
 	for _, p := range pos {
 		row := positionResp{
-			Symbol: p.Symbol, Qty: p.Qty.String(), Reserved: p.ReservedQty.String(),
-			CostBasis: p.CostBasis.String(), Realized: p.RealizedPnL.String(),
+			Symbol: p.Symbol, Qty: p.Qty.String(), QtyUnits: int64(p.Qty),
+			Reserved:  p.ReservedQty.String(),
+			CostBasis: p.CostBasis.String(), CostBasisMinor: int64(p.CostBasis),
+			Realized: p.RealizedPnL.String(), RealizedMinor: int64(p.RealizedPnL),
 		}
 		if p.HasMark {
-			row.Mark, row.Unrealized = p.MarkPrice.String(), p.UnrealizedPnL.String()
+			row.Mark, row.MarkMinor = p.MarkPrice.String(), int64(p.MarkPrice)
+			row.Unrealized, row.UnrealizedMinor = p.UnrealizedPnL.String(), int64(p.UnrealizedPnL)
 		}
 		out = append(out, row)
 	}

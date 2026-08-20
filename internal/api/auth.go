@@ -117,8 +117,8 @@ func (s *Server) handleGitHubStart(w http.ResponseWriter, r *http.Request) {
 	// in as the attacker.
 	http.SetCookie(w, &http.Cookie{
 		Name: stateCookie, Value: state, Path: "/auth",
-		HttpOnly: true, Secure: s.auth.secureCookies(),
-		SameSite: http.SameSiteLaxMode, MaxAge: 600,
+		HttpOnly: true, Secure: s.cookieSecure(),
+		SameSite: s.cookieSameSite(), MaxAge: 600,
 	})
 
 	q := url.Values{}
@@ -287,8 +287,8 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, provider,
 	// POST an order with this cookie attached, which is the CSRF case that matters here.
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: token, Path: "/",
-		HttpOnly: true, Secure: s.auth.secureCookies(),
-		SameSite: http.SameSiteLaxMode, Expires: expires,
+		HttpOnly: true, Secure: s.cookieSecure(),
+		SameSite: s.cookieSameSite(), Expires: expires,
 	})
 
 	if provider == "dev" || r.Header.Get("Accept") == "application/json" {
@@ -299,7 +299,26 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, provider,
 		})
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusFound)
+	http.Redirect(w, r, s.afterLogin(), http.StatusFound)
+}
+
+// cookieSameSite picks the strictest policy that still works.
+//
+// Lax is preferred: it means a form on another site cannot POST an order with the user's
+// cookie attached. A cross-origin frontend cannot use it — the browser would withhold the
+// cookie from its own app — so that deployment takes None and accepts that CSRF protection
+// now rests on CORS naming the one origin allowed to make credentialed calls.
+func (s *Server) cookieSameSite() http.SameSite {
+	if s.crossOrigin() {
+		return http.SameSiteNoneMode
+	}
+	return http.SameSiteLaxMode
+}
+
+// cookieSecure reports whether the cookie may be marked Secure. SameSite=None REQUIRES it,
+// so a cross-origin deployment is HTTPS-only by construction.
+func (s *Server) cookieSecure() bool {
+	return s.auth.secureCookies() || s.crossOrigin()
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -308,7 +327,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: s.auth.secureCookies(), SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: s.cookieSecure(), SameSite: s.cookieSameSite(),
 	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "signed out"})
 }
